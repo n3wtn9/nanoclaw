@@ -49,6 +49,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 ## What It Supports
 
 - **WhatsApp I/O** - Message Claude from your phone
+- **CLI mode** - Interactive terminal REPL (`npm run cli`) with isolated sessions
 - **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
 - **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
 - **Scheduled tasks** - Recurring jobs that run Claude and can message you back
@@ -120,14 +121,17 @@ Skills we'd love to see:
 ## Architecture
 
 ```
-WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
+Channel (WhatsApp/CLI) --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
 ```
 
 Single Node.js process. Agents execute in isolated Linux containers with mounted directories. Per-group message queue with concurrency control. IPC via filesystem.
 
 Key files:
-- `src/index.ts` - Orchestrator: state, message loop, agent invocation
+- `src/core.ts` - Shared logic: NanoClawCore class (state, message loop, agent invocation)
+- `src/index.ts` - WhatsApp entry point: wires WhatsApp channel to core
+- `src/cli.ts` - CLI entry point: interactive REPL with session management
 - `src/channels/whatsapp.ts` - WhatsApp connection, auth, send/receive
+- `src/channels/cli.ts` - CLI channel: readline-based terminal I/O
 - `src/ipc.ts` - IPC watcher and task processing
 - `src/router.ts` - Message formatting and outbound routing
 - `src/group-queue.ts` - Per-group queue with global concurrency limit

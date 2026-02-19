@@ -17,7 +17,7 @@ src/container-runner.ts               container/agent-runner/
     │ spawns Docker container              │ runs Claude Agent SDK
     │ with volume mounts                   │ with MCP servers
     │                                      │
-    ├── data/env/env ──────────────> /workspace/env-dir/env
+    │ stdin JSON ─────────────────> credentials (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
     ├── groups/{folder} ───────────> /workspace/group
     ├── data/ipc/{folder} ────────> /workspace/ipc
     ├── data/sessions/{folder}/.claude/ ──> /home/node/.claude/ (isolated per-group)
@@ -80,7 +80,7 @@ cat .env  # Should show one of:
 
 ### 2. Environment Variables Not Passing
 
-The system passes only authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) to the container via stdin JSON. Other env vars are not exposed.
+The system reads only authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) from `.env` via `readEnvFile()` and passes them to the container via stdin JSON. Other env vars are not exposed. Credentials are never mounted as files.
 
 To verify the container can start:
 ```bash
@@ -106,17 +106,18 @@ docker run --rm --entrypoint /bin/bash nanoclaw-agent:latest -c 'ls -la /workspa
 Expected structure:
 ```
 /workspace/
-├── env-dir/env           # Environment file (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
 ├── group/                # Current group folder (cwd)
 ├── project/              # Project root (main channel only)
 ├── global/               # Global CLAUDE.md (non-main only)
 ├── ipc/                  # Inter-process communication
-│   ├── messages/         # Outgoing WhatsApp messages
+│   ├── messages/         # Outgoing messages
 │   ├── tasks/            # Scheduled task commands
 │   ├── current_tasks.json    # Read-only: scheduled tasks visible to this group
-│   └── available_groups.json # Read-only: WhatsApp groups for activation (main only)
+│   └── available_groups.json # Read-only: groups for activation (main only)
 └── extra/                # Additional custom mounts
 ```
+
+Note: Credentials are NOT mounted as files — they are passed via stdin JSON.
 
 ### 4. Permission Issues
 
@@ -145,7 +146,7 @@ grep -A3 "Claude sessions" src/container-runner.ts
 
 **Verify sessions are accessible:**
 ```bash
-container run --rm --entrypoint /bin/bash \
+docker run --rm --entrypoint /bin/bash \
   -v ~/.claude:/home/node/.claude \
   nanoclaw-agent:latest -c '
 echo "HOME=$HOME"
@@ -170,11 +171,9 @@ If an MCP server fails to start, the agent may exit. Check the container logs fo
 
 ### Test the full agent flow:
 ```bash
-# Set up env file
-mkdir -p data/env groups/test
-cp .env data/env/env
+mkdir -p groups/test
 
-# Run test query
+# Run test query (credentials passed via stdin JSON)
 echo '{"prompt":"What is 2+2?","groupFolder":"test","chatJid":"test@g.us","isMain":false}' | \
   docker run -i \
   -v $(pwd)/groups/test:/workspace/group \
@@ -312,8 +311,8 @@ echo "=== Checking NanoClaw Container Setup ==="
 echo -e "\n1. Authentication configured?"
 [ -f .env ] && (grep -q "CLAUDE_CODE_OAUTH_TOKEN=sk-" .env || grep -q "ANTHROPIC_API_KEY=sk-" .env) && echo "OK" || echo "MISSING - add CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY to .env"
 
-echo -e "\n2. Env file copied for container?"
-[ -f data/env/env ] && echo "OK" || echo "MISSING - will be created on first run"
+echo -e "\n2. TypeScript compiled?"
+[ -f dist/index.js ] && echo "OK" || echo "MISSING - run: npm run build"
 
 echo -e "\n3. Docker running?"
 docker info &>/dev/null && echo "OK" || echo "NOT RUNNING - start Docker Desktop (macOS) or systemctl start docker (Linux)"

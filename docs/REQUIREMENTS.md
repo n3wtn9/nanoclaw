@@ -58,19 +58,20 @@ Skills to add or switch to different messaging platforms:
 The project uses Docker for cross-platform container support (macOS and Linux).
 
 ### Platform Support
-- `/setup-linux` - Make the full setup work on Linux (depends on Docker conversion)
+- `/setup-linux` - Make the full setup work on Linux (Docker is already supported)
 - `/setup-windows` - Windows support via WSL2 + Docker
 
 ---
 
 ## Vision
 
-A personal Claude assistant accessible via WhatsApp, with minimal custom code.
+A personal Claude assistant accessible via WhatsApp or CLI, with minimal custom code.
 
 **Core components:**
 - **Claude Agent SDK** as the core agent
 - **Docker** for isolated agent execution (containers)
 - **WhatsApp** as the primary I/O channel
+- **CLI** as an alternative terminal-based channel
 - **Persistent memory** per conversation and globally
 - **Scheduled tasks** that run Claude and can message back
 - **Web access** for search and browsing
@@ -139,6 +140,12 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - Using baileys library for WhatsApp Web connection
 - Messages stored in SQLite, polled by router
 - QR code authentication during setup
+
+### CLI
+- Terminal-based interactive REPL via `npm run cli`
+- Each run creates an isolated session (`cli-{timestamp}@local`)
+- `--resume` to continue previous sessions, `--clean` to delete old ones
+- Uses the same NanoClawCore as WhatsApp (shared message loop, agent invocation)
 
 ### Scheduler
 - Built-in scheduler runs on the host, spawns containers for task execution
