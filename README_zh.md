@@ -33,7 +33,7 @@ claude
 
 **小到可以理解:** 一个进程，几个源文件。没有微服务，没有消息队列，没有抽象层。让 Claude Code 带你过一遍代码。
 
-**通过隔离保障安全:** 智能体运行在 Linux 容器（在 macOS 上是 Apple Container，或 Docker）中。它们只能看到被明确挂载的内容。即使是 Bash 访问也是安全的，因为命令是在容器内部执行，而不是在你的主机上。
+**通过隔离保障安全:** 智能体运行在 Docker 容器中。它们只能看到被明确挂载的内容。即使是 Bash 访问也是安全的，因为命令是在容器内部执行，而不是在你的主机上。
 
 **为单一用户打造:** 这不是一个框架。这是一个完全符合我个人需求的、可工作的软件。你应该 fork 它，然后让 Claude Code 修改它以完全匹配你的需求。
 
@@ -52,7 +52,8 @@ claude
 - **主频道** - 你的私有频道（self-chat），用于管理控制；其他所有群组都完全隔离
 - **计划任务** - 运行 Claude 的周期性作业，并可以给你回发消息
 - **网络访问** - 搜索和抓取网页内容
-- **容器隔离** - 智能体在 Apple Container (macOS) 或 Docker (macOS/Linux) 的沙箱中运行
+- **CLI 模式** - 通过终端直接与智能体对话，每次运行创建隔离会话
+- **容器隔离** - 智能体在 Docker 容器的沙箱中运行（macOS/Linux）
 - **智能体集群（Agent Swarms）** - 启动多个专业智能体团队，协作完成复杂任务（首个支持此功能的个人 AI 助手）
 - **可选集成** - 通过技能添加 Gmail (`/add-gmail`) 等更多功能
 
@@ -114,23 +115,26 @@ claude
 - macOS 或 Linux
 - Node.js 20+
 - [Claude Code](https://claude.ai/download)
-- [Apple Container](https://github.com/apple/container) (macOS) 或 [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
+- [Docker](https://docker.com/products/docker-desktop)
 
 ## 架构
 
 ```
-WhatsApp (baileys) --> SQLite --> 轮询循环 --> 容器 (Claude Agent SDK) --> 响应
+频道 (WhatsApp/CLI) --> SQLite --> 轮询循环 --> Docker 容器 (Claude Agent SDK) --> 响应
 ```
 
-单一 Node.js 进程。智能体在具有挂载目录的隔离 Linux 容器中执行。每个群组独立的消息队列，带全局并发控制。通过文件系统进行进程间通信（IPC）。
+单一 Node.js 进程。智能体在具有挂载目录的隔离 Docker 容器中执行。每个群组独立的消息队列，带全局并发控制。通过文件系统进行进程间通信（IPC）。
 
 关键文件：
-- `src/index.ts` - 编排器：状态管理、消息循环、智能体调用
+- `src/core.ts` - 共享逻辑：NanoClawCore 类（状态管理、消息循环、智能体调用）
+- `src/index.ts` - WhatsApp 入口：将 WhatsApp 频道连接到核心
+- `src/cli.ts` - CLI 入口：交互式 REPL，带会话管理
 - `src/channels/whatsapp.ts` - WhatsApp 连接、认证、收发消息
+- `src/channels/cli.ts` - CLI 频道：基于 readline 的终端 I/O
 - `src/ipc.ts` - IPC 监听与任务处理
 - `src/router.ts` - 消息格式化与出站路由
 - `src/group-queue.ts` - 每群组队列，带全局并发限制
-- `src/container-runner.ts` - 生成流式智能体容器
+- `src/container-runner.ts` - 生成流式 Docker 智能体容器
 - `src/task-scheduler.ts` - 运行计划任务
 - `src/db.ts` - SQLite 操作（消息、群组、会话、状态）
 - `groups/*/CLAUDE.md` - 各群组的记忆
@@ -141,13 +145,13 @@ WhatsApp (baileys) --> SQLite --> 轮询循环 --> 容器 (Claude Agent SDK) -->
 
 因为我用 WhatsApp。fork 这个项目然后运行一个技能来改变它。正是这个项目的核心理念。
 
-**为什么是 Apple Container 而不是 Docker？**
+**为什么是 Docker？**
 
-在 macOS 上，Apple Container 轻巧、快速，并为 Apple 芯片优化。但 Docker 也完全支持——在 `/setup` 期间，你可以选择使用哪个运行时。在 Linux 上，会自动使用 Docker。
+Docker 提供跨平台支持（macOS 和 Linux）、庞大的生态系统以及成熟的工具链。macOS 上的 Docker Desktop 使用轻量级 Linux 虚拟机。
 
 **我可以在 Linux 上运行吗？**
 
-可以。运行 `/setup`，它会自动配置 Docker 作为容器运行时。感谢 [@dotsetgreg](https://github.com/dotsetgreg) 贡献了 `/convert-to-docker` 技能。
+可以。NanoClaw 使用 Docker，在 macOS 和 Linux 上都能运行。只需安装 Docker 并运行 `/setup`。
 
 **这个安全吗？**
 

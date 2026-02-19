@@ -1,6 +1,6 @@
 # NanoClaw Specification
 
-A personal Claude assistant accessible via WhatsApp, with persistent memory per conversation, scheduled tasks, and email integration.
+A personal Claude assistant accessible via WhatsApp or CLI, with persistent memory per conversation, scheduled tasks, and container isolation.
 
 ---
 
@@ -29,9 +29,10 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌──────────────┐                     ┌────────────────────┐        │
-│  │  WhatsApp    │────────────────────▶│   SQLite Database  │        │
-│  │  (baileys)   │◀────────────────────│   (messages.db)    │        │
-│  └──────────────┘   store/send        └─────────┬──────────┘        │
+│  │  Channel     │────────────────────▶│   SQLite Database  │        │
+│  │  (WhatsApp   │◀────────────────────│   (messages.db)    │        │
+│  │   or CLI)    │   store/send        └─────────┬──────────┘        │
+│  └──────────────┘                               │                   │
 │                                                  │                   │
 │         ┌────────────────────────────────────────┘                   │
 │         │                                                            │
@@ -76,7 +77,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 | WhatsApp Connection | Node.js (@whiskeysockets/baileys) | Connect to WhatsApp, send/receive messages |
 | Message Storage | SQLite (better-sqlite3) | Store messages for polling |
 | Container Runtime | Docker | Isolated containers for agent execution |
-| Agent | @anthropic-ai/claude-agent-sdk (0.2.29) | Run Claude with tools and MCP servers |
+| Agent | @anthropic-ai/claude-agent-sdk (0.2.34) | Run Claude with tools and MCP servers |
 | Browser Automation | agent-browser + Chromium | Web interaction and screenshots |
 | Runtime | Node.js 20+ | Host process for routing and scheduling |
 
@@ -98,9 +99,12 @@ nanoclaw/
 ├── .gitignore
 │
 ├── src/
-│   ├── index.ts                   # Orchestrator: state, message loop, agent invocation
+│   ├── core.ts                    # Shared logic: NanoClawCore class (state, message loop, agent invocation)
+│   ├── index.ts                   # WhatsApp entry point: wires WhatsApp channel to core
+│   ├── cli.ts                     # CLI entry point: interactive REPL with session management
 │   ├── channels/
-│   │   └── whatsapp.ts            # WhatsApp connection, auth, send/receive
+│   │   ├── whatsapp.ts            # WhatsApp connection, auth, send/receive
+│   │   └── cli.ts                 # CLI channel: readline-based terminal I/O
 │   ├── ipc.ts                     # IPC watcher and task processing
 │   ├── router.ts                  # Message formatting and outbound routing
 │   ├── config.ts                  # Configuration constants
@@ -155,7 +159,6 @@ nanoclaw/
 │
 ├── data/                          # Application state (gitignored)
 │   ├── sessions/                  # Per-group session data (.claude/ dirs with JSONL transcripts)
-│   ├── env/env                    # Copy of .env for container mounting
 │   └── ipc/                       # Container IPC (messages/, tasks/)
 │
 ├── logs/                          # Runtime logs (gitignored)
@@ -175,28 +178,39 @@ Configuration constants are in `src/config.ts`:
 
 ```typescript
 import path from 'path';
+import { readEnvFile } from './env.js';
 
-export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
+const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
+
+export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+export const ASSISTANT_HAS_OWN_NUMBER =
+  (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
-// Paths are absolute (required for container mounts)
+// Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
+const HOME_DIR = process.env.HOME || '/Users/user';
+
+// Mount security: allowlist stored OUTSIDE project root, never mounted into containers
+export const MOUNT_ALLOWLIST_PATH = path.join(HOME_DIR, '.config', 'nanoclaw', 'mount-allowlist.json');
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+export const MAIN_GROUP_FOLDER = 'main';
 
-// Container configuration
 export const CONTAINER_IMAGE = process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
-export const CONTAINER_TIMEOUT = parseInt(process.env.CONTAINER_TIMEOUT || '1800000', 10); // 30min default
+export const CONTAINER_TIMEOUT = parseInt(process.env.CONTAINER_TIMEOUT || '1800000', 10);
+export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(process.env.CONTAINER_MAX_OUTPUT_SIZE || '10485760', 10); // 10MB
 export const IPC_POLL_INTERVAL = 1000;
-export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min — keep container alive after last result
+export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min
 export const MAX_CONCURRENT_CONTAINERS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5);
 
-export const TRIGGER_PATTERN = new RegExp(`^@${ASSISTANT_NAME}\\b`, 'i');
+export const TRIGGER_PATTERN = new RegExp(`^@${escapeRegex(ASSISTANT_NAME)}\\b`, 'i');
+export const TIMEZONE = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
 ```
 
-**Note:** Paths must be absolute for Docker volume mounts to work correctly.
+**Note:** Paths must be absolute for Docker volume mounts to work correctly. Secrets (API keys) are NOT read in config — they are loaded directly in `container-runner.ts` and passed via stdin.
 
 ### Container Configuration
 
@@ -307,11 +321,18 @@ Sessions enable conversation continuity - Claude remembers what you talked about
 3. Claude continues the conversation with full context
 4. Session transcripts are stored as JSONL files in `data/sessions/{group}/.claude/`
 
+### CLI Sessions
+
+CLI sessions follow the same pattern as WhatsApp groups but are isolated per-run:
+- Each `npm run cli` creates a new group: `cli-{timestamp}@local` with folder `cli-{timestamp}/`
+- `npm run cli -- --resume` lists previous CLI sessions and lets you pick one to continue
+- `npm run cli -- --clean` deletes selected CLI sessions (group folder, session data, DB records)
+
 ---
 
 ## Message Flow
 
-### Incoming Message Flow
+### Incoming Message Flow (WhatsApp)
 
 ```
 1. User sends WhatsApp message
@@ -353,6 +374,27 @@ Sessions enable conversation continuity - Claude remembers what you talked about
    │
    ▼
 10. Router updates last agent timestamp and saves session ID
+```
+
+### Incoming Message Flow (CLI)
+
+```
+1. User types message in terminal
+   │
+   ▼
+2. CLIChannel creates NewMessage, stores in SQLite
+   │
+   ▼
+3. Message loop polls SQLite (every 2 seconds)
+   │
+   ▼
+4. No trigger check (requiresTrigger: false for CLI groups)
+   │
+   ▼
+5. Same agent invocation path as WhatsApp (steps 6-10 above)
+   │
+   ▼
+6. Response printed to terminal with assistant name prefix
 ```
 
 ### Trigger Word Matching
@@ -473,7 +515,7 @@ The `nanoclaw` MCP server is created dynamically per agent call with the current
 | `pause_task` | Pause a task |
 | `resume_task` | Resume a paused task |
 | `cancel_task` | Delete a task |
-| `send_message` | Send a WhatsApp message to the group |
+| `send_message` | Send a message to the group |
 
 ---
 
@@ -483,16 +525,26 @@ NanoClaw runs as a single macOS launchd service.
 
 ### Startup Sequence
 
-When NanoClaw starts, it:
+When NanoClaw starts (WhatsApp mode via `npm start` or `npm run dev`), it:
 1. **Ensures Docker is running** - Kills orphaned NanoClaw containers from previous runs
 2. Initializes the SQLite database (migrates from JSON files if they exist)
-3. Loads state from SQLite (registered groups, sessions, router state)
-4. Connects to WhatsApp (on `connection.open`):
+3. Creates a `NanoClawCore` instance wired to the WhatsApp channel callbacks
+4. Loads state from SQLite (registered groups, sessions, router state)
+5. Connects to WhatsApp (on `connection.open`):
    - Starts the scheduler loop
    - Starts the IPC watcher for container messages
    - Sets up the per-group queue with `processGroupMessages`
    - Recovers any unprocessed messages from before shutdown
    - Starts the message polling loop
+
+When started in CLI mode (`npm run cli`), it:
+1. Ensures Docker is running
+2. Initializes the SQLite database
+3. Creates a `NanoClawCore` instance wired to CLI channel callbacks (stdin/stdout)
+4. Auto-registers a CLI group (`cli-{timestamp}@local`, `requiresTrigger: false`)
+5. Starts the message polling loop (no scheduler, no IPC watcher)
+
+CLI sessions are isolated — each run creates a new group folder with its own memory and session. Use `--resume` to continue a previous session or `--clean` to delete old ones.
 
 ### Service: com.nanoclaw
 
@@ -621,7 +673,7 @@ chmod 700 groups/
 
 Run manually for verbose output:
 ```bash
-npm run dev
-# or
-node dist/index.js
+npm run dev          # WhatsApp service with hot reload
+npm run cli          # CLI mode (interactive REPL)
+node dist/index.js   # Production WhatsApp service
 ```

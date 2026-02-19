@@ -549,6 +549,27 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   return result;
 }
 
+// --- CLI session helpers ---
+
+export function deleteRegisteredGroup(jid: string): void {
+  db.prepare('DELETE FROM registered_groups WHERE jid = ?').run(jid);
+}
+
+export function deleteSession(groupFolder: string): void {
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+}
+
+export function deleteMessagesForChat(chatJid: string): void {
+  db.prepare('DELETE FROM messages WHERE chat_jid = ?').run(chatJid);
+  db.prepare('DELETE FROM chats WHERE jid = ?').run(chatJid);
+}
+
+export function getLastMessageForChat(chatJid: string): { content: string } | undefined {
+  return db
+    .prepare('SELECT content FROM messages WHERE chat_jid = ? ORDER BY timestamp DESC LIMIT 1')
+    .get(chatJid) as { content: string } | undefined;
+}
+
 // --- JSON migration ---
 
 function migrateJsonState(): void {

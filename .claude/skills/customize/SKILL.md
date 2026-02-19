@@ -12,14 +12,18 @@ This skill helps users add capabilities or modify behavior. Use AskUserQuestion 
 1. **Understand the request** - Ask clarifying questions
 2. **Plan the changes** - Identify files to modify
 3. **Implement** - Make changes directly to the code
-4. **Test guidance** - Tell user how to verify
+4. **Update documentation** - Update all docs that reference changed behavior (see below)
+5. **Test guidance** - Tell user how to verify
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
+| `src/core.ts` | Shared logic: NanoClawCore class (state, message loop, agent invocation) |
+| `src/index.ts` | WhatsApp entry point: wires WhatsApp channel to core |
+| `src/cli.ts` | CLI entry point: interactive REPL with session management |
 | `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
+| `src/channels/cli.ts` | CLI channel: readline-based terminal I/O |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/types.ts` | TypeScript interfaces (includes Channel) |
@@ -39,9 +43,9 @@ Questions to ask:
 - Should messages from this channel go to existing groups or new ones?
 
 Implementation pattern:
-1. Create `src/channels/{name}.ts` implementing the `Channel` interface from `src/types.ts` (see `src/channels/whatsapp.ts` for reference)
-2. Add the channel instance to `main()` in `src/index.ts` and wire callbacks (`onMessage`, `onChatMetadata`)
-3. Messages are stored via the `onMessage` callback; routing is automatic via `ownsJid()`
+1. Create `src/channels/{name}.ts` implementing the `Channel` interface from `src/types.ts` (see `src/channels/whatsapp.ts` or `src/channels/cli.ts` for reference)
+2. Create an entry point (e.g., `src/{name}.ts`) that creates a `NanoClawCore` from `src/core.ts` and wires the channel callbacks
+3. Messages are stored via `storeMessageDirect()` from `src/db.ts`; routing is automatic through the core's message loop
 
 ### Adding a New MCP Integration
 
@@ -73,7 +77,7 @@ Questions to ask:
 
 Implementation:
 1. Commands are handled by the agent naturally — add instructions to `groups/CLAUDE.md` or the group's `CLAUDE.md`
-2. For trigger-level routing changes, modify `processGroupMessages()` in `src/index.ts`
+2. For trigger-level routing changes, modify `processGroupMessages()` in `src/core.ts`
 
 ### Changing Deployment
 
@@ -85,6 +89,24 @@ Implementation:
 1. Create appropriate service files
 2. Update paths in config
 3. Provide setup instructions
+
+## Update Documentation (REQUIRED)
+
+After every change, update all documentation that references the modified behavior. Documentation drift makes the codebase untrustworthy for both humans and AI. Check each of these files and update any that are now out of date:
+
+| File | What to check |
+|------|---------------|
+| `CLAUDE.md` | Key Files table, Development commands, Quick Context description |
+| `README.md` | "What It Supports" list, Architecture diagram and key files, FAQ |
+| `README_zh.md` | Chinese translation — mirror all changes from README.md |
+| `docs/SPEC.md` | Architecture diagram, Folder Structure tree, Technology Stack table, Startup Sequence, Message Flow, Session Management, any section describing behavior you changed |
+| `docs/REQUIREMENTS.md` | Architecture Decisions, Integration Points, Vision |
+| `docs/SECURITY.md` | Trust model, security boundaries, credential handling, architecture diagram |
+| `.claude/skills/customize/SKILL.md` | Key Files table (this file — keep it current) |
+| `.claude/skills/debug/SKILL.md` | Architecture Overview, if container or mount behavior changed |
+| `.claude/skills/setup/SKILL.md` | If setup steps, dependencies, or service config changed |
+
+**Rule of thumb:** If you added a new file, it should appear in every "key files" list. If you added a new feature, it should appear in every "what it supports" list. If you changed how something works, every description of that thing must be updated. Read each doc and ask: "Does this still accurately describe the system?"
 
 ## After Changes
 
@@ -102,6 +124,6 @@ User: "Add Telegram as an input channel"
 
 1. Ask: "Should Telegram use the same @Andy trigger, or a different one?"
 2. Ask: "Should Telegram messages create separate conversation contexts, or share with WhatsApp groups?"
-3. Create `src/channels/telegram.ts` implementing the `Channel` interface (see `src/channels/whatsapp.ts`)
-4. Add the channel to `main()` in `src/index.ts`
+3. Create `src/channels/telegram.ts` implementing the `Channel` interface (see `src/channels/whatsapp.ts` or `src/channels/cli.ts`)
+4. Create an entry point or add to an existing one, wiring the channel to `NanoClawCore` from `src/core.ts`
 5. Tell user how to authenticate and test
